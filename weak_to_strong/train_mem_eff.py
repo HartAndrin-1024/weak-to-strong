@@ -60,9 +60,9 @@ def train_model(
         ).gradient_checkpointing_enable()
 
     nsteps = len(ds) * epochs // batch_size
-    # debug=True
-    # if debug:
-    #     nsteps=10
+    debug=True
+    if debug:
+        nsteps=10
 
     def lr_schedule_fn(step):
         if lr_schedule == "constant":

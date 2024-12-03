@@ -14,7 +14,7 @@ from weak_to_strong.common import get_tokenizer
 from weak_to_strong.datasets import (VALID_DATASETS, load_dataset,
                                      tokenize_dataset)
 from weak_to_strong.loss import logconf_loss_fn, product_loss_fn, xent_loss
-from weak_to_strong.train import ModelConfig, train_and_save_model
+from weak_to_strong.train import ModelConfig, train_model2
 
 # NOTE learning rates are not particularly tuned, work somewhat reasonably at train batch size 32
 MODEL_CONFIGS = [
@@ -226,7 +226,7 @@ def main(
 
     loss_fn = loss_dict[loss]
     print(f"Training model model, size {model_size}")
-    test_results, weak_ds = train_and_save_model(
+    test_results, weak_ds = train_model2(
         model_config,
         train1_ds,
         test_ds,

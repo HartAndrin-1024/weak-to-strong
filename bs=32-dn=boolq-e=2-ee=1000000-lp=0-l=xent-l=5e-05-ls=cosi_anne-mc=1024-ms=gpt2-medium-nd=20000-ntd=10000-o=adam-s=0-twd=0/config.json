@@ -1,0 +1,17 @@
+{
+  "batch_size": 32,
+  "max_ctx": 1024,
+  "ds_name": "boolq",
+  "loss": "xent",
+  "n_docs": 20000,
+  "n_test_docs": 10000,
+  "model_size": "gpt2-medium",
+  "lr": 5e-05,
+  "optim": "adam",
+  "epochs": 2,
+  "seed": 0,
+  "train_with_dropout": false,
+  "linear_probe": false,
+  "lr_schedule": "cosine_anneal",
+  "eval_every": 1000000
+}
