@@ -167,7 +167,7 @@ def train_model(
     return final_eval_results
 
 
-def train_and_save_model(
+def train_model(
     model_config: ModelConfig,
     train_ds: datasets.Dataset,
     test_ds: datasets.Dataset,
@@ -198,20 +198,20 @@ def train_and_save_model(
     custom_kwargs = model_config.custom_kwargs or {}
 
     def maybe_load_model(model):
-        if os.path.exists(os.path.join(save_path, "results.pkl")) and not force_retrain:
-            print("loading from", save_path)
-            checkpoint_path = os.path.join(save_path, "pytorch_model.bin")
-            if not os.path.exists(checkpoint_path):
-                # Assume this means we have a sharded checkpoint, and load it appropriately
-                load_sharded_checkpoint(model, checkpoint_path)
-            else:
-                state_dict = torch.load(os.path.join(save_path, "pytorch_model.bin"))
-                state_dict = {
-                    k.replace("transformer.module", "transformer"): v
-                    for (k, v) in state_dict.items()
-                }
-                custom_kwargs["state_dict"] = state_dict
-            return True
+        # if os.path.exists(os.path.join(save_path, "results.pkl")) and not force_retrain:
+        #     print("loading from", save_path)
+        #     checkpoint_path = os.path.join(save_path, "pytorch_model.bin")
+        #     if not os.path.exists(checkpoint_path):
+        #         # Assume this means we have a sharded checkpoint, and load it appropriately
+        #         load_sharded_checkpoint(model, checkpoint_path)
+        #     else:
+        #         state_dict = torch.load(os.path.join(save_path, "pytorch_model.bin"))
+        #         state_dict = {
+        #             k.replace("transformer.module", "transformer"): v
+        #             for (k, v) in state_dict.items()
+        #         }
+        #         custom_kwargs["state_dict"] = state_dict
+        #     return True
         return False
 
     already_trained = False
@@ -276,13 +276,13 @@ def train_and_save_model(
 
         # # Apply this function before saving the model
         # model = break_tensor_sharing(model)
-        if save_path:
-            # Note: If the model is wrapped by DataParallel, we need to unwrap it before saving
-            # max_shard_size="2GB"
-            (model if hasattr(model, "save_pretrained") else model.module).save_pretrained(
-                save_path, safe_serialization=False
-            )
-            print("saved", save_path)
+        # if save_path:
+        #     # Note: If the model is wrapped by DataParallel, we need to unwrap it before saving
+        #     # max_shard_size="2GB"
+        #     (model if hasattr(model, "save_pretrained") else model.module).save_pretrained(
+        #         save_path, safe_serialization=False
+        #     )
+        #     print("saved", save_path)
 
     inference_results = None
     if inference_ds:
