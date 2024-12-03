@@ -18,10 +18,6 @@ def main(model_sizes: Union[List[str], str], **kwargs):
     for key, value in kwargs.items():
         basic_args.extend([f"--{key}", str(value)])
 
-    print("Running ground truth models")
-    for model_size in model_sizes:
-        subprocess.run(basic_args + ["--model_size", model_size], check=True)
-
     print("Running transfer models")
     for i in range(len(model_sizes)):
         for j in range(i, len(model_sizes)):

@@ -46,6 +46,8 @@ MODEL_CONFIGS = [
             and torch.cuda.device_count() > 1
         ),
     ),
+
+    # I should re-run experiments with gpt2-xl at the end, iteration speed is probably too slow with it for all experiments
 ]
 MODELS_DICT: Dict[str, ModelConfig] = {
     model_config.name: model_config for model_config in MODEL_CONFIGS
