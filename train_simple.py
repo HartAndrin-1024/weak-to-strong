@@ -2,12 +2,13 @@ import json
 import os
 import random
 import subprocess
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable
 
 import fire
 import numpy as np
 import torch
 from datasets import load_dataset, load_from_disk
+from datasets import Dataset, concatenate_datasets
 
 import weak_to_strong.logger as logger
 from weak_to_strong.common import get_tokenizer
@@ -111,7 +112,23 @@ def main(
     # still do final evals (which requires eval_every to be set to a non-zero, non-None value)
     eval_every: int = 1000000,
     sync_command: Optional[str] = None,
+    loss_fn2: Callable = logconf_loss_fn,
+    prop_of_gt: str='0',
+    hard_questions_only: str='',
+    upweight_gt_factor: str='1',
+    curriculum: str='',
+    med_questions_only: str='',
+    weighted_auto: str='',
+    online_correction: str='',
 ):
+    curriculum=bool(curriculum)
+    upweight_gt_factor=int(upweight_gt_factor) #TODO: there is more work to be done here including sweeps etc
+    prop_of_gt=float(prop_of_gt)
+    hard_questions_only=bool(hard_questions_only)
+    med_questions_only=bool(med_questions_only)
+    weighted_auto=bool(weighted_auto)
+    online_correction=bool(online_correction)
+
     # this is per device!
     if minibatch_size_per_device is None:
         minibatch_size_per_device = 1
@@ -213,6 +230,7 @@ def main(
         config["weak_model"] = weak_model_config
 
     save_path = os.path.join(results_folder, sweep_subfolder, config_name)
+    save_path=save_path+f'-propgt{prop_of_gt}'+f'-hardquest{hard_questions_only}'+f'-upweightfactor{upweight_gt_factor}'+f'-medquest{med_questions_only}'+f'-curr{curriculum}'
     logger.configure(
         name="{sweep_subfolder}_{config_name}_{datetime_now}",
         save_path=save_path,
@@ -223,9 +241,90 @@ def main(
     tokenizer = get_tokenizer(model_config.name)
     train1_ds = tokenize_dataset(train1_ds, tokenizer, max_ctx)
     test_ds = tokenize_dataset(test_ds, tokenizer, max_ctx)
+
+    def apply_gt_label(data):
+        if data['gt_label']==1:
+            data['soft_label']=[float(0),float(1)]
+        else:
+            data['soft_label']=[float(1),float(0)]
+        # data['hard_label']=data['soft_label']
+        return data
     if train2_ds:
         train2_ds = tokenize_dataset(train2_ds, tokenizer, max_ctx)
+    elif curriculum:
+        train1_ds=train1_ds.shuffle(seed=seed)
+        split_datasets=train1_ds.train_test_split(test_size=prop_of_gt, seed=seed)
+        to_adj=split_datasets['test']
+        to_stay=split_datasets['train']
+        to_adj=to_adj.map(apply_gt_label)
+        
+        to_adj_split1=to_adj.train_test_split(test_size=.4, seed=seed)
+        to_adj_part1=to_adj_split1['test']
+        to_adj_split2=to_adj_split1['train'].train_test_split(test_size=.5,seed=seed)
+        to_adj_part2=to_adj_split2['test']
+        to_adj_split3=to_adj_split2['train'].train_test_split(test_size=.6666,seed=seed)
+        to_adj_part3=to_adj_split3['test']
+        to_adj_part4=to_adj_split3['train']
 
+        to_stay_split1=to_stay.train_test_split(test_size=.25, seed=seed)
+        to_stay_part1=to_stay_split1['test']
+        to_stay_split2=to_stay_split1['train'].train_test_split(test_size=.33333,seed=seed)
+        to_stay_part2=to_stay_split2['test']
+        to_stay_split3=to_stay_split2['train'].train_test_split(test_size=.5,seed=seed)
+        to_stay_part3=to_stay_split3['test']
+        to_stay_part4=to_stay_split3['train']
+
+        final_part1=concatenate_datasets([to_adj_part1,to_stay_part1])
+        final_part1=final_part1.shuffle(seed=seed)
+        final_part2=concatenate_datasets([to_adj_part2,to_stay_part2])
+        final_part2=final_part2.shuffle(seed=seed)
+        final_part3=concatenate_datasets([to_adj_part3,to_stay_part3])
+        final_part3=final_part3.shuffle(seed=seed)
+        final_part4=concatenate_datasets([to_adj_part4,to_stay_part4])
+        final_part4=final_part4.shuffle(seed=seed)
+
+        train1_ds=concatenate_datasets([final_part4,final_part3,final_part2,final_part1])
+
+    elif upweight_gt_factor!=1:
+        train1_ds=train1_ds.shuffle(seed=seed)
+        split_datasets=train1_ds.train_test_split(test_size=prop_of_gt, seed=seed)
+        to_adj=split_datasets['test']
+        to_stay=split_datasets['train']
+        to_adj=to_adj.map(apply_gt_label)
+        to_add_adj=concatenate_datasets([to_adj]*upweight_gt_factor)
+        train1_ds=concatenate_datasets([to_add_adj,to_stay])
+        train1_ds=train1_ds.shuffle(seed=seed)
+    elif hard_questions_only:
+        def amount_wrong(data):
+            data['amount_wrong']=(1-data['acc'])*(max(data['soft_label']))
+            return data
+        train1_ds=train1_ds.map(amount_wrong)
+        train1_ds=train1_ds.sort('amount_wrong', reverse=True)
+        first_n=train1_ds.select(range(int(len(train1_ds)*prop_of_gt)))
+        remaining=train1_ds.select(range(int(len(train1_ds)*prop_of_gt),len(train1_ds)))
+        first_n=first_n.map(apply_gt_label)
+        train1_ds=concatenate_datasets([first_n,remaining])
+        train1_ds=train1_ds.shuffle(seed=seed)
+    elif med_questions_only:
+        def amount_uncertain(data):
+            data['amount_uncertain']=(abs(data['soft_label'][0]-0.5))
+            return data
+        train1_ds=train1_ds.map(amount_uncertain)
+        train1_ds=train1_ds.sort('amount_uncertain')
+        first_n=train1_ds.select(range(int(len(train1_ds)*prop_of_gt)))
+        remaining=train1_ds.select(range(int(len(train1_ds)*prop_of_gt),len(train1_ds)))
+        first_n=first_n.map(apply_gt_label)
+        train1_ds=concatenate_datasets([first_n,remaining])
+        train1_ds=train1_ds.shuffle(seed=seed)
+    elif not online_correction:
+        if prop_of_gt!=0:
+            train1_ds=train1_ds.shuffle(seed=seed)
+            split_datasets=train1_ds.train_test_split(test_size=prop_of_gt, seed=seed)
+            to_adj=split_datasets['test']
+            to_stay=split_datasets['train']
+            to_adj=to_adj.map(apply_gt_label)
+            train1_ds=concatenate_datasets([to_stay,to_adj])
+        train1_ds=train1_ds.shuffle(seed=seed) # Note to self: have to rerun these experiments, the first one was bugged and wasn't shuffling properly
     loss_fn = loss_dict[loss]
     print(f"Training model model, size {model_size}")
     test_results, weak_ds = train_model2(
@@ -246,6 +345,9 @@ def main(
         lr_schedule=lr_schedule,
         optimizer_name=optim,
         eval_every=eval_every,
+        weighted_auto=weighted_auto,
+        online_correction=online_correction,
+        prop_of_gt=prop_of_gt,
     )
 
     if weak_ds is not None:
@@ -254,6 +356,32 @@ def main(
     acc = np.mean([x["acc"] for x in test_results])
     res_dict = {"accuracy": acc}
     print("accuracy:", acc)
+
+    # # logconf_loss=logconf_loss_fn()
+    # def logconf_loss(logits,labels,step_frac):
+    #     logits = logits.float()
+    #     labels = labels.float()
+    #     coef = 1.0
+    #     coef = coef * self.aux_coef
+    #     preds = torch.softmax(logits, dim=-1)
+    #     mean_weak = torch.mean(labels, dim=0)
+    #     assert mean_weak.shape == (2,)
+    #     threshold = torch.quantile(preds[:, 0], mean_weak[1])
+    #     strong_preds = torch.cat(
+    #         [(preds[:, 0] >= threshold)[:, None], (preds[:, 0] < threshold)[:, None]],
+    #         dim=1,
+    #     )
+    #     target = labels * (1 - coef) + strong_preds.detach() * coef
+    #     loss = torch.nn.functional.cross_entropy(logits, target, reduction="none")
+    #     return loss.mean()
+    # logits=[x['logits'] for x in test_results]
+    # labels=[x['soft_label'] for x in test_results]
+
+    # logconf=logconf_loss(torch.tensor(logits),torch.tensor(labels),1)
+    # config['logconf']=logconf
+
+    # import ipdb
+    # ipdb.set_trace()
 
     with open(os.path.join(save_path, f"config.json"), "w") as f:
         json.dump(config, f, indent=2)

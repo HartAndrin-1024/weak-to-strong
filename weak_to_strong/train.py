@@ -14,7 +14,7 @@ from transformers.modeling_utils import load_sharded_checkpoint
 import weak_to_strong.logger as logger
 from weak_to_strong.common import clear_mem
 from weak_to_strong.eval import eval_model_acc
-from weak_to_strong.loss import xent_loss
+from weak_to_strong.loss import xent_loss, product_loss_fn
 from weak_to_strong.model import TransformerWithHead
 
 
@@ -45,6 +45,9 @@ def train_model(
     epochs: int = 1,
     lr_schedule: str = "cosine_anneal",
     optimizer_name: str = "adam",
+    weighted_auto: bool = False,
+    online_correction: bool = False,
+    prop_of_gt: float = 0,
 ):
     print("LR", lr, "batch_size", batch_size, "minibatch_size", minibatch_size)
     assert batch_size % minibatch_size == 0, "batch size must be divisible by minibatch size"
@@ -60,9 +63,9 @@ def train_model(
         ).gradient_checkpointing_enable()
 
     nsteps = len(ds) * epochs // batch_size
-    debug=True
-    if debug:
-        nsteps=10
+    # debug=True
+    # if debug:
+    #     nsteps=10
 
     def lr_schedule_fn(step):
         if lr_schedule == "constant":
@@ -106,6 +109,7 @@ def train_model(
             logger.logkv("eval_accuracy", eval_accs)
         all_logits = []
         all_labels = []
+        all_gt_labels = []
         for i in range(batch_size // minibatch_size):
             try:
                 mbatch = [next(it) for _ in range(minibatch_size)]
@@ -121,12 +125,34 @@ def train_model(
             )
             labels = torch.tensor([ex["soft_label"] for ex in mbatch]).to(io_device)
 
+            gt_labels = torch.tensor([ex["gt_label"] for ex in mbatch]).to(io_device)
+
             logits = model(input_ids)
 
             all_logits.extend(logits.to(io_device))
             all_labels.extend(labels)
+            all_gt_labels.extend(gt_labels)
         all_logits = torch.stack(all_logits)
         all_labels = torch.stack(all_labels)
+        all_gt_labels = torch.stack(all_gt_labels)
+        if online_correction:
+            num_of_gt_tmp=len(all_gt_labels)*prop_of_gt
+            num_of_gt=int(num_of_gt_tmp)+np.random.binomial(1,num_of_gt_tmp%1)
+            probs=torch.sigmoid(all_logits)
+            differences=torch.abs(probs-all_labels)[:,0]
+            sorted_indices=torch.argsort(-differences)
+            relevant_indices=sorted_indices[:num_of_gt].tolist()
+            def gt_to_tensor(elem):
+                if elem==1:
+                    return torch.tensor([0,1])
+                else:
+                    return torch.tensor([1,0])
+            for index in relevant_indices:
+                all_labels[index]=gt_to_tensor(all_gt_labels[index].item())
+        # if weighted_auto:
+        #     loss_fn=xent_loss_weighted
+        #     all_weights=0
+        #     loss=loss_fn(all_logits, all_labels, step_frac=step / nsteps, all_weights=all_weights)
         loss = loss_fn(all_logits, all_labels, step_frac=step / nsteps)
         loss_tot += loss.item()
         loss.backward()
@@ -187,6 +213,9 @@ def train_model2(
     lr_schedule: str = "constant",
     optimizer_name: str = "adam",
     eval_every: Optional[int] = None,
+    weighted_auto: bool = False,
+    online_correction: bool =False,
+    prop_of_gt: float = 0,
 ):
     if eval_batch_size is None:
         eval_batch_size = batch_size
@@ -267,6 +296,9 @@ def train_model2(
             train_with_dropout=train_with_dropout,
             lr_schedule=lr_schedule,
             optimizer_name=optimizer_name,
+            weighted_auto=weighted_auto,
+            online_correction=online_correction,
+            prop_of_gt=prop_of_gt,
         )
         print("Model training took", time.time() - start, "seconds")
         # def break_tensor_sharing(model):
