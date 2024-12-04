@@ -6,7 +6,7 @@ from typing import List, Union
 import fire
 
 
-def main(model_sizes: Union[List[str], str], prop_of_gt: str='0', hard_questions_only='', upweight_gt_factor='1' ,med_questions_only='',weighted_auto='',online_correction='',curriculum='',**kwargs):
+def main(model_sizes: Union[List[str], str], prop_of_gt: str='0', hard_questions_only='', upweight_gt_factor='1' ,med_questions_only='',weighted_auto='1.0',online_correction='',curriculum='',**kwargs):
     if isinstance(model_sizes, str):
         model_sizes = model_sizes.split(",")
     assert (
