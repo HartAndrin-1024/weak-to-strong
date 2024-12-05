@@ -118,8 +118,9 @@ def main(
     upweight_gt_factor: str='1',
     curriculum: str='',
     med_questions_only: str='',
-    weighted_auto: str='',
-    online_correction: str='1',
+    weighted_auto: str='1.0',
+    online_correction: str='',
+    upweight_med_quest: str='',
 ):
     curriculum=bool(curriculum)
     upweight_gt_factor=int(upweight_gt_factor) #TODO: there is more work to be done here including sweeps etc
@@ -128,6 +129,7 @@ def main(
     med_questions_only=bool(med_questions_only)
     weighted_auto=float(weighted_auto)
     online_correction=bool(online_correction)
+    upweight_med_quest=bool(upweight_med_quest)
 
     # this is per device!
     if minibatch_size_per_device is None:
@@ -230,7 +232,7 @@ def main(
         config["weak_model"] = weak_model_config
 
     save_path = os.path.join(results_folder, sweep_subfolder, config_name)
-    save_path=save_path+f'-propgt{prop_of_gt}'+f'-hardquest{hard_questions_only}'+f'-upweightfactor{upweight_gt_factor}'+f'-medquest{med_questions_only}'+f'-curr{curriculum}'+f'-onlinecorr{online_correction}'+f'-weightedauto{weighted_auto}'
+    save_path=save_path+f'-propgt{prop_of_gt}'+f'-hardquest{hard_questions_only}'+f'-upweightfactor{upweight_gt_factor}'+f'-medquest{med_questions_only}'+f'-curr{curriculum}'+f'-onlinecorr{online_correction}'+f'-upweightmedquest{upweight_med_quest}'
     logger.configure(
         name="{sweep_subfolder}_{config_name}_{datetime_now}",
         save_path=save_path,
@@ -316,20 +318,32 @@ def main(
         first_n=first_n.map(apply_gt_label)
         train1_ds=concatenate_datasets([first_n,remaining])
         train1_ds=train1_ds.shuffle(seed=seed)
-    elif weighted_auto!=1:
-        # io_device = model.device if hasattr(model, "device") else 0
-        def apply_weight_add(data,weight):
-            data['weight']=torch.tensor(weight)
+    elif upweight_med_quest:
+        def amount_uncertain(data):
+            data['amount_uncertain']=(abs(data['soft_label'][0]-0.5))
             return data
+        train1_ds=train1_ds.map(amount_uncertain)
+        train1_ds=train1_ds.sort('amount_uncertain')
+        first_n=train1_ds.select(range(int(len(train1_ds)*prop_of_gt)))
+        remaining=train1_ds.select(range(int(len(train1_ds)*prop_of_gt),len(train1_ds)))
+        first_n=first_n.map(apply_gt_label)
+        to_add_adj=concatenate_datasets([first_n]*4)
+        train1_ds=concatenate_datasets([to_add_adj,remaining])
         train1_ds=train1_ds.shuffle(seed=seed)
-        split_datasets=train1_ds.train_test_split(test_size=prop_of_gt, seed=seed)
-        to_adj=split_datasets['test']
-        to_stay=split_datasets['train']
-        to_adj.map(apply_gt_label)
-        to_adj=to_adj.map(apply_weight_add, fn_kwargs={'weight': weighted_auto})
-        to_stay=to_stay.map(apply_weight_add,fn_kwargs={'weight': 1.0})
-        train1_ds=concatenate_datasets([to_adj,to_stay])
-        train1_ds=train1_ds.shuffle(seed=seed)
+    # elif weighted_auto!=1:
+    #     # io_device = model.device if hasattr(model, "device") else 0
+    #     def apply_weight_add(data,weight):
+    #         data['weight']=torch.tensor(weight)
+    #         return data
+    #     train1_ds=train1_ds.shuffle(seed=seed)
+    #     split_datasets=train1_ds.train_test_split(test_size=prop_of_gt, seed=seed)
+    #     to_adj=split_datasets['test']
+    #     to_stay=split_datasets['train']
+    #     to_adj.map(apply_gt_label)
+    #     to_adj=to_adj.map(apply_weight_add, fn_kwargs={'weight': weighted_auto})
+    #     to_stay=to_stay.map(apply_weight_add,fn_kwargs={'weight': 1.0})
+    #     train1_ds=concatenate_datasets([to_adj,to_stay])
+    #     train1_ds=train1_ds.shuffle(seed=seed)
     elif not online_correction:
         if prop_of_gt!=0:
             train1_ds=train1_ds.shuffle(seed=seed)
